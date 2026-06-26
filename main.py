@@ -1,4 +1,3 @@
-
 import asyncio
 import os
 import sqlite3
@@ -8,7 +7,6 @@ from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 )
-
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
@@ -18,7 +16,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ---------------- DB ----------------
+# ---------------- DATABASE ----------------
 conn = sqlite3.connect("database.db")
 cursor = conn.cursor()
 
@@ -34,7 +32,7 @@ CREATE TABLE IF NOT EXISTS teams (
 """)
 conn.commit()
 
-# ---------------- USER MENU ----------------
+# ---------------- KEYBOARDS ----------------
 menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🟢 Зарегистрировать команду")],
@@ -44,7 +42,6 @@ menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ---------------- ADMIN MENU ----------------
 admin_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="👑 Админ-панель")]
@@ -62,9 +59,16 @@ class Form(StatesGroup):
 @dp.message(F.text == "/start")
 async def start(message: Message):
     if message.from_user.id == ADMIN_ID:
-        await message.answer("👑 Админ вход", reply_markup=admin_menu)
+        await message.answer("👑 Админ-панель", reply_markup=admin_menu)
     else:
-        await message.answer("Выберите действие:", reply_markup=menu)
+        await message.answer(
+            "🏆 FAR2 WOW TOURNAMENT\n"
+            "💰 PRIZE: 5000 UC\n\n"
+            "Для регистрации нажмите кнопку 'Зарегистрировать команду'\n"
+            "и следуйте указаниям.\n\n"
+            "Выберите действие:",
+            reply_markup=menu
+        )
 
 # ---------------- ADMIN PANEL ----------------
 @dp.message(F.text == "👑 Админ-панель")
@@ -89,8 +93,7 @@ async def admin_panel(message: Message):
         [InlineKeyboardButton(text="📋 Все команды", callback_data="all")],
         [InlineKeyboardButton(text="⏳ Ожидают", callback_data="pending")],
         [InlineKeyboardButton(text="✅ Принятые", callback_data="accepted")],
-        [InlineKeyboardButton(text="❌ Отклонённые", callback_data="rejected")],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")]
+        [InlineKeyboardButton(text="❌ Отклонённые", callback_data="rejected")]
     ])
 
     await message.answer(
@@ -102,9 +105,9 @@ async def admin_panel(message: Message):
         reply_markup=kb
     )
 
-# ---------------- CALLBACK MENU ----------------
+# ---------------- LIST FILTER ----------------
 @dp.callback_query(F.data.in_(["all","pending","accepted","rejected"]))
-async def show_lists(call: CallbackQuery):
+async def list_teams(call: CallbackQuery):
 
     query_map = {
         "all": "SELECT user_id, team, status FROM teams",
@@ -120,15 +123,20 @@ async def show_lists(call: CallbackQuery):
         await call.message.edit_text("📭 Пусто")
         return
 
-    text = "📋 СПИСОК КОМАНД:\n\n"
-
+    text = "📋 КОМАНДЫ:\n\n"
     kb = []
 
     for user_id, team, status in rows:
-        text += f"🏷 {team} | {status}\n"
+        status_text = {
+            "pending": "⏳",
+            "accepted": "✅",
+            "rejected": "❌"
+        }.get(status, "❓")
+
+        text += f"🏷 {team} {status_text}\n"
 
         kb.append([
-            InlineKeyboardButton(text=f"🏷 {team}", callback_data=f"view|{user_id}")
+            InlineKeyboardButton(text=f"{team}", callback_data=f"view|{user_id}")
         ])
 
     await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
@@ -148,11 +156,17 @@ async def view_team(call: CallbackQuery):
 
     team, nicknames, username, status = row
 
+    status_text = {
+        "pending": "⏳ На рассмотрении",
+        "accepted": "✅ Принята",
+        "rejected": "❌ Отклонена"
+    }.get(status, "❓")
+
     text = (
         f"🏷 {team}\n"
         f"👥 {nicknames}\n"
         f"👤 @{username}\n"
-        f"📊 {status}"
+        f"📊 {status_text}"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -176,8 +190,7 @@ async def accept(call: CallbackQuery):
     conn.commit()
 
     await bot.send_message(user_id, "✅ Ваша команда ПРИНЯТА!")
-
-    await call.answer("Принято")
+    await call.answer()
 
 # ---------------- REJECT ----------------
 @dp.callback_query(F.data.startswith("reject"))
@@ -188,8 +201,7 @@ async def reject(call: CallbackQuery):
     conn.commit()
 
     await bot.send_message(user_id, "❌ Ваша команда ОТКЛОНЕНА!")
-
-    await call.answer("Отклонено")
+    await call.answer()
 
 # ---------------- DELETE ----------------
 @dp.callback_query(F.data.startswith("delete"))
@@ -199,16 +211,16 @@ async def delete(call: CallbackQuery):
     cursor.execute("DELETE FROM teams WHERE user_id=?", (user_id,))
     conn.commit()
 
-    await bot.send_message(user_id, "⚠️ Ваша команда была удалена админом")
-    await call.answer("Удалено")
+    await bot.send_message(user_id, "⚠️ Ваша команда удалена админом")
+    await call.answer()
 
-# ---------------- USER REGISTRATION ----------------
+# ---------------- REGISTER ----------------
 @dp.message(F.text == "🟢 Зарегистрировать команду")
 async def reg_start(message: Message, state: FSMContext):
 
     cursor.execute("SELECT * FROM teams WHERE user_id=?", (message.from_user.id,))
     if cursor.fetchone():
-        await message.answer("❌ Уже есть команда")
+        await message.answer("❌ У вас уже есть команда")
         return
 
     await message.answer("Введите название команды:")
@@ -245,7 +257,7 @@ async def finish(message: Message, state: FSMContext):
 
     conn.commit()
 
-    await message.answer("✅ Отправлено!", reply_markup=menu)
+    await message.answer("✅ Заявка отправлена!", reply_markup=menu)
     await state.clear()
 
 # ---------------- MY TEAM ----------------
@@ -257,16 +269,26 @@ async def my_team(message: Message):
     row = cursor.fetchone()
 
     if not row:
-        await message.answer("❌ Нет команды")
+        await message.answer("❌ У вас нет команды")
         return
 
     team, nicknames, username, status = row
 
+    status_text = {
+        "pending": "⏳ На рассмотрении",
+        "accepted": "✅ Принята",
+        "rejected": "❌ Отклонена"
+    }.get(status, "❓")
+
     await message.answer(
-        f"🏷 {team}\n👥 {nicknames}\n👤 @{username}\n📊 {status}"
+        f"📄 ВАША КОМАНДА\n\n"
+        f"🏷 {team}\n"
+        f"👥 {nicknames}\n"
+        f"👤 @{username}\n"
+        f"📊 {status_text}"
     )
 
-# ---------------- REMOVE ----------------
+# ---------------- REMOVE TEAM ----------------
 @dp.message(F.text == "❌ Снять команду")
 async def remove(message: Message):
 
@@ -282,9 +304,8 @@ async def remove(message: Message):
     cursor.execute("DELETE FROM teams WHERE user_id=?", (message.from_user.id,))
     conn.commit()
 
-    await bot.send_message(ADMIN_ID, f"⚠️ Команда снята: {team}")
-
-    await message.answer("✅ Удалено")
+    await bot.send_message(ADMIN_ID, f"⚠️ КОМАНДА СНЯТА: {team}")
+    await message.answer("✅ Команда удалена")
 
 # ---------------- RUN ----------------
 async def main():
