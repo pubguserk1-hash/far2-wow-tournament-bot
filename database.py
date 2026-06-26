@@ -1,0 +1,173 @@
+import sqlite3
+import os
+
+DB_FOLDER = "database"
+DB_PATH = os.path.join(DB_FOLDER, "tournament.db")
+
+
+def connect():
+    if not os.path.exists(DB_FOLDER):
+        os.makedirs(DB_FOLDER)
+
+    return sqlite3.connect(DB_PATH)
+
+
+def create_database():
+    conn = connect()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS teams(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+        telegram_id INTEGER UNIQUE,
+
+        username TEXT,
+
+        team_name TEXT UNIQUE,
+
+        player1 TEXT,
+
+        player2 TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def team_exists(team_name):
+    conn = connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT id FROM teams WHERE LOWER(team_name)=LOWER(?)",
+        (team_name,)
+    )
+
+    result = cursor.fetchone()
+
+    conn.close()
+
+    return result is not None
+
+
+def user_registered(user_id):
+    conn = connect()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT id FROM teams WHERE telegram_id=?",
+        (user_id,)
+    )
+
+    result = cursor.fetchone()
+
+    conn.close()
+
+    return result is not None
+
+
+def add_team(user_id, username, team_name, player1, player2):
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO teams(
+            telegram_id,
+            username,
+            team_name,
+            player1,
+            player2
+        )
+
+        VALUES(?,?,?,?,?)
+    """, (
+        user_id,
+        username,
+        team_name,
+        player1,
+        player2
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_team(user_id):
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT
+        team_name,
+        player1,
+        player2,
+        username
+    FROM teams
+    WHERE telegram_id=?
+    """, (user_id,))
+
+    result = cursor.fetchone()
+
+    conn.close()
+
+    return result
+
+
+def get_all_teams():
+
+    conn = connect()
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    SELECT
+        team_name,
+        player1,
+        player2,
+        username
+
+    FROM teams
+
+    ORDER BY id
+    """)
+
+    result = cursor.fetchall()
+
+    conn.close()
+
+    return result
+
+
+def delete_team(user_id):
+
+    conn = connect()
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM teams WHERE telegram_id=?",
+        (user_id,)
+    )
+
+    conn.commit()
+
+    conn.close()
+
+
+def teams_count():
+
+    conn = connect()
+
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM teams")
+
+    count = cursor.fetchone()[0]
+
+    conn.close()
+
+    return count
