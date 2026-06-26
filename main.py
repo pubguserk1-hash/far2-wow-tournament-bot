@@ -1,7 +1,7 @@
 import asyncio
 import os
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
@@ -10,6 +10,9 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# ---------------- ПАМЯТЬ (анти-дубликаты) ----------------
+registered_teams = set()
 
 # ---------------- КНОПКИ ----------------
 menu = ReplyKeyboardMarkup(
@@ -29,21 +32,25 @@ class Form(StatesGroup):
 # ---------------- /start ----------------
 @dp.message(F.text == "/start")
 async def start(message: Message):
-    await message.answer(
-        "Добро пожаловать!\nВыберите действие:",
-        reply_markup=menu
-    )
+    await message.answer("Выберите действие:", reply_markup=menu)
 
-# ---------------- НАЧАЛО РЕГИСТРАЦИИ ----------------
+# ---------------- СТАРТ ----------------
 @dp.message(F.text == "🟢 Зарегистрировать команду")
 async def reg_start(message: Message, state: FSMContext):
     await message.answer("Введите название команды:")
     await state.set_state(Form.team)
 
-# ---------------- НАЗВАНИЕ КОМАНДЫ ----------------
+# ---------------- КОМАНДА ----------------
 @dp.message(Form.team)
 async def get_team(message: Message, state: FSMContext):
-    await state.update_data(team=message.text)
+    team = message.text.strip()
+
+    # ❌ АНТИ-ДУБЛИКАТ
+    if team.lower() in registered_teams:
+        await message.answer("❌ Эта команда уже зарегистрирована!")
+        return
+
+    await state.update_data(team=team)
     await message.answer("Введите никнеймы игроков:")
     await state.set_state(Form.nicknames)
 
@@ -54,31 +61,58 @@ async def get_nicknames(message: Message, state: FSMContext):
     await message.answer("Введите юзернейм регистратора:")
     await state.set_state(Form.username)
 
-# ---------------- ФИНИШ ----------------
+# ---------------- ФИНАЛ ----------------
 @dp.message(Form.username)
 async def finish(message: Message, state: FSMContext):
     data = await state.get_data()
-    username = message.text
+    username = message.text.strip()
+
+    team = data["team"]
+    registered_teams.add(team.lower())
 
     text = (
-        f"📥 НОВАЯ КОМАНДА\n\n"
-        f"🏷 Команда: {data['team']}\n"
+        f"📥 НОВАЯ ЗАЯВКА\n\n"
+        f"🏷 Команда: {team}\n"
         f"👥 Никнеймы: {data['nicknames']}\n"
         f"👤 Регистратор: @{username}"
     )
 
-    # админу
-    await bot.send_message(ADMIN_ID, text)
+    # админ-кнопки
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Принять", callback_data=f"accept|{team}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject|{team}")
+        ]
+    ])
 
-    # пользователю
-    await message.answer("✅ Ваша команда успешно зарегистрирована!", reply_markup=menu)
+    await bot.send_message(ADMIN_ID, text, reply_markup=kb)
+    await message.answer("✅ Заявка отправлена!", reply_markup=menu)
 
     await state.clear()
 
-# ---------------- "МОЯ КОМАНДА" (заглушка) ----------------
-@dp.message(F.text == "📄 Моя команда")
-async def my_team(message: Message):
-    await message.answer("ℹ️ Эта функция будет добавлена позже (по желанию можем сделать базу данных).")
+# ---------------- АДМИН: ПРИЕМ ----------------
+@dp.callback_query(F.data.startswith("accept"))
+async def accept(call: CallbackQuery):
+    team = call.data.split("|")[1]
+
+    await call.message.edit_text(
+        call.message.text + "\n\n✅ ПРИНЯТО"
+    )
+
+    await call.answer("Принято")
+
+# ---------------- АДМИН: ОТКЛОН ----------------
+@dp.callback_query(F.data.startswith("reject"))
+async def reject(call: CallbackQuery):
+    team = call.data.split("|")[1]
+
+    registered_teams.discard(team.lower())
+
+    await call.message.edit_text(
+        call.message.text + "\n\n❌ ОТКЛОНЕНО"
+    )
+
+    await call.answer("Отклонено")
 
 # ---------------- RUN ----------------
 async def main():
