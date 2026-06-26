@@ -11,8 +11,9 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ---------------- ПАМЯТЬ (анти-дубликаты) ----------------
-registered_teams = set()
+# ---------------- ПАМЯТЬ ----------------
+registered_users = set()   # 🔐 1 заявка на пользователя
+user_to_team = {}          # для уведомлений
 
 # ---------------- КНОПКИ ----------------
 menu = ReplyKeyboardMarkup(
@@ -37,20 +38,19 @@ async def start(message: Message):
 # ---------------- СТАРТ ----------------
 @dp.message(F.text == "🟢 Зарегистрировать команду")
 async def reg_start(message: Message, state: FSMContext):
+
+    # 🔐 ОГРАНИЧЕНИЕ 1 ЗАЯВКИ
+    if message.from_user.id in registered_users:
+        await message.answer("❌ Вы уже отправили заявку!")
+        return
+
     await message.answer("Введите название команды:")
     await state.set_state(Form.team)
 
 # ---------------- КОМАНДА ----------------
 @dp.message(Form.team)
 async def get_team(message: Message, state: FSMContext):
-    team = message.text.strip()
-
-    # ❌ АНТИ-ДУБЛИКАТ
-    if team.lower() in registered_teams:
-        await message.answer("❌ Эта команда уже зарегистрирована!")
-        return
-
-    await state.update_data(team=team)
+    await state.update_data(team=message.text)
     await message.answer("Введите никнеймы игроков:")
     await state.set_state(Form.nicknames)
 
@@ -67,21 +67,24 @@ async def finish(message: Message, state: FSMContext):
     data = await state.get_data()
     username = message.text.strip()
 
+    user_id = message.from_user.id
     team = data["team"]
-    registered_teams.add(team.lower())
+
+    registered_users.add(user_id)
+    user_to_team[user_id] = team
 
     text = (
         f"📥 НОВАЯ ЗАЯВКА\n\n"
         f"🏷 Команда: {team}\n"
         f"👥 Никнеймы: {data['nicknames']}\n"
-        f"👤 Регистратор: @{username}"
+        f"👤 Регистратор: @{username}\n"
+        f"🆔 UserID: {user_id}"
     )
 
-    # админ-кнопки
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Принять", callback_data=f"accept|{team}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject|{team}")
+            InlineKeyboardButton(text="✅ Принять", callback_data=f"accept|{user_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject|{user_id}")
         ]
     ])
 
@@ -90,28 +93,30 @@ async def finish(message: Message, state: FSMContext):
 
     await state.clear()
 
-# ---------------- АДМИН: ПРИЕМ ----------------
+# ---------------- ПРИНЯТЬ ----------------
 @dp.callback_query(F.data.startswith("accept"))
 async def accept(call: CallbackQuery):
-    team = call.data.split("|")[1]
+    user_id = int(call.data.split("|")[1])
 
-    await call.message.edit_text(
-        call.message.text + "\n\n✅ ПРИНЯТО"
-    )
+    team = user_to_team.get(user_id, "Неизвестно")
 
+    await bot.send_message(user_id, f"✅ Ваша заявка на команду '{team}' ПРИНЯТА!")
+
+    await call.message.edit_text(call.message.text + "\n\n✅ ПРИНЯТО")
     await call.answer("Принято")
 
-# ---------------- АДМИН: ОТКЛОН ----------------
+# ---------------- ОТКЛОНИТЬ ----------------
 @dp.callback_query(F.data.startswith("reject"))
 async def reject(call: CallbackQuery):
-    team = call.data.split("|")[1]
+    user_id = int(call.data.split("|")[1])
 
-    registered_teams.discard(team.lower())
+    team = user_to_team.get(user_id, "Неизвестно")
 
-    await call.message.edit_text(
-        call.message.text + "\n\n❌ ОТКЛОНЕНО"
-    )
+    registered_users.discard(user_id)
 
+    await bot.send_message(user_id, f"❌ Ваша заявка на команду '{team}' ОТКЛОНЕНА!")
+
+    await call.message.edit_text(call.message.text + "\n\n❌ ОТКЛОНЕНО")
     await call.answer("Отклонено")
 
 # ---------------- RUN ----------------
