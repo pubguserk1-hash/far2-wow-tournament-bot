@@ -224,13 +224,13 @@ async def get_team(message: Message, state: FSMContext):
         return
 
     await state.update_data(team=team)
-    await message.answer("Введите никнеймы через пробел:")
+    await message.answer("Введите никнеймы:")
     await state.set_state(Form.nicknames)
 
 @dp.message(Form.nicknames)
 async def get_nicknames(message: Message, state: FSMContext):
     await state.update_data(nicknames=message.text)
-    await message.answer("Введите юзернейм без "@":")
+    await message.answer("Введите юзернейм:")
     await state.set_state(Form.username)
 
 @dp.message(Form.username)
