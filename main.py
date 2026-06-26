@@ -1,5 +1,7 @@
 import asyncio
 import os
+import sqlite3
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
@@ -11,9 +13,20 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ---------------- ПАМЯТЬ ----------------
-registered_users = set()   # 🔐 1 заявка на пользователя
-user_to_team = {}          # для уведомлений
+# ---------------- DB ----------------
+conn = sqlite3.connect("database.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    team TEXT UNIQUE,
+    nicknames TEXT,
+    username TEXT
+)
+""")
+conn.commit()
 
 # ---------------- КНОПКИ ----------------
 menu = ReplyKeyboardMarkup(
@@ -24,67 +37,81 @@ menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# ---------------- СОСТОЯНИЯ ----------------
+# ---------------- STATES ----------------
 class Form(StatesGroup):
     team = State()
     nicknames = State()
     username = State()
 
-# ---------------- /start ----------------
+# ---------------- START ----------------
 @dp.message(F.text == "/start")
 async def start(message: Message):
     await message.answer("Выберите действие:", reply_markup=menu)
 
-# ---------------- СТАРТ ----------------
+# ---------------- REG START ----------------
 @dp.message(F.text == "🟢 Зарегистрировать команду")
 async def reg_start(message: Message, state: FSMContext):
 
-    # 🔐 ОГРАНИЧЕНИЕ 1 ЗАЯВКИ
-    if message.from_user.id in registered_users:
-        await message.answer("❌ Вы уже отправили заявку!")
+    # проверка в БД
+    cursor.execute("SELECT * FROM teams WHERE user_id=?", (message.from_user.id,))
+    if cursor.fetchone():
+        await message.answer("❌ У вас уже есть зарегистрированная команда!")
         return
 
     await message.answer("Введите название команды:")
     await state.set_state(Form.team)
 
-# ---------------- КОМАНДА ----------------
+# ---------------- TEAM ----------------
 @dp.message(Form.team)
 async def get_team(message: Message, state: FSMContext):
-    await state.update_data(team=message.text)
+    team = message.text.strip()
+
+    # проверка уникальности команды
+    cursor.execute("SELECT * FROM teams WHERE team=?", (team,))
+    if cursor.fetchone():
+        await message.answer("❌ Такая команда уже существует!")
+        return
+
+    await state.update_data(team=team)
     await message.answer("Введите никнеймы игроков:")
     await state.set_state(Form.nicknames)
 
-# ---------------- НИКНЕЙМЫ ----------------
+# ---------------- NICKNAMES ----------------
 @dp.message(Form.nicknames)
 async def get_nicknames(message: Message, state: FSMContext):
     await state.update_data(nicknames=message.text)
     await message.answer("Введите юзернейм регистратора:")
     await state.set_state(Form.username)
 
-# ---------------- ФИНАЛ ----------------
+# ---------------- FINISH ----------------
 @dp.message(Form.username)
 async def finish(message: Message, state: FSMContext):
     data = await state.get_data()
-    username = message.text.strip()
 
-    user_id = message.from_user.id
     team = data["team"]
+    nicknames = data["nicknames"]
+    username = message.text
+    user_id = message.from_user.id
 
-    registered_users.add(user_id)
-    user_to_team[user_id] = team
+    # сохранить в БД
+    cursor.execute(
+        "INSERT INTO teams (user_id, team, nicknames, username) VALUES (?, ?, ?, ?)",
+        (user_id, team, nicknames, username)
+    )
+    conn.commit()
 
     text = (
-        f"📥 НОВАЯ ЗАЯВКА\n\n"
-        f"🏷 Команда: {team}\n"
-        f"👥 Никнеймы: {data['nicknames']}\n"
-        f"👤 Регистратор: @{username}\n"
-        f"🆔 UserID: {user_id}"
+        f"📥 НОВАЯ КОМАНДА\n\n"
+        f"🏷 {team}\n"
+        f"👥 {nicknames}\n"
+        f"👤 @{username}\n"
+        f"🆔 {user_id}"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Принять", callback_data=f"accept|{user_id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject|{user_id}")
+            InlineKeyboardButton(text="✅ Принять", callback_data=f"accept|{user_id}|{team}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject|{user_id}|{team}")
         ]
     ])
 
@@ -93,31 +120,62 @@ async def finish(message: Message, state: FSMContext):
 
     await state.clear()
 
-# ---------------- ПРИНЯТЬ ----------------
+# ---------------- ADMIN LIST ----------------
+@dp.message(F.text == "/list")
+async def list_teams(message: Message):
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    cursor.execute("SELECT team, nicknames, username FROM teams")
+    rows = cursor.fetchall()
+
+    if not rows:
+        await message.answer("📭 Нет команд")
+        return
+
+    text = "📋 СПИСОК КОМАНД:\n\n"
+    for i, r in enumerate(rows, 1):
+        text += f"{i}. 🏷 {r[0]} | 👥 {r[1]} | 👤 {r[2]}\n"
+
+    await message.answer(text)
+
+# ---------------- BAN ----------------
+@dp.message(F.text.startswith("/ban"))
+async def ban_team(message: Message):
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        team = message.text.split(" ", 1)[1]
+    except:
+        await message.answer("❌ Используй: /ban <название команды>")
+        return
+
+    cursor.execute("DELETE FROM teams WHERE team=?", (team,))
+    conn.commit()
+
+    await message.answer(f"❌ Команда {team} удалена")
+
+# ---------------- CALLBACKS ----------------
 @dp.callback_query(F.data.startswith("accept"))
 async def accept(call: CallbackQuery):
-    user_id = int(call.data.split("|")[1])
+    _, user_id, team = call.data.split("|")
 
-    team = user_to_team.get(user_id, "Неизвестно")
-
-    await bot.send_message(user_id, f"✅ Ваша заявка на команду '{team}' ПРИНЯТА!")
-
+    await bot.send_message(int(user_id), f"✅ Ваша команда '{team}' ПРИНЯТА!")
     await call.message.edit_text(call.message.text + "\n\n✅ ПРИНЯТО")
-    await call.answer("Принято")
 
-# ---------------- ОТКЛОНИТЬ ----------------
+# ---------------- REJECT ----------------
 @dp.callback_query(F.data.startswith("reject"))
 async def reject(call: CallbackQuery):
-    user_id = int(call.data.split("|")[1])
+    _, user_id, team = call.data.split("|")
 
-    team = user_to_team.get(user_id, "Неизвестно")
+    cursor.execute("DELETE FROM teams WHERE team=?", (team,))
+    conn.commit()
 
-    registered_users.discard(user_id)
-
-    await bot.send_message(user_id, f"❌ Ваша заявка на команду '{team}' ОТКЛОНЕНА!")
-
+    await bot.send_message(int(user_id), f"❌ Ваша команда '{team}' ОТКЛОНЕНА!")
     await call.message.edit_text(call.message.text + "\n\n❌ ОТКЛОНЕНО")
-    await call.answer("Отклонено")
 
 # ---------------- RUN ----------------
 async def main():
