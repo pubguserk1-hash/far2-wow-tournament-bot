@@ -33,6 +33,15 @@ def create_database():
 
     )
     """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS settings(
+
+      key TEXT PRIMARY KEY,
+
+      value TEXT
+
+)
+""")
 
     conn.commit()
     conn.close()
